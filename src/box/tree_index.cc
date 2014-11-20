@@ -47,29 +47,71 @@ static bool index_arena_initialized = false;
 
 struct key_data
 {
+	uint64_t hint;
 	const char *key;
 	uint32_t part_count;
 };
 
 int
-tree_index_compare(const tuple *a, const tuple *b, struct key_def *key_def)
+tree_index_compare(struct tuple_with_hint a, struct tuple_with_hint b, struct key_def *key_def)
 {
-	int r = tuple_compare(a, b, key_def);
+	if (a.hint < b.hint)
+		return -1;
+	else if (a.hint > b.hint)
+		return 1;
+	int r = tuple_compare(a.tuple, b.tuple, key_def);
 	if (r == 0 && !key_def->is_unique)
-		r = a < b ? -1 : a > b;
+		r = a.tuple < b.tuple ? -1 : a.tuple > b.tuple;
 	return r;
 }
 int
-tree_index_compare_key(const tuple *a, const key_data *key_data,
+tree_index_compare_key(struct tuple_with_hint a, const key_data *key_data,
 		       struct key_def *key_def)
 {
-	return tuple_compare_with_key(a, key_data->key, key_data->part_count,
+	if (a.hint < key_data->hint)
+		return -1;
+	else if (a.hint > key_data->hint)
+		return 1;
+	return tuple_compare_with_key(a.tuple, key_data->key, key_data->part_count,
 				      key_def);
 }
+
+static uint64_t
+calc_hint_key(const char *key, struct key_def *key_def)
+{
+	if (key_def->parts[0].type == NUM) {
+		return mp_decode_uint(&key);
+	} else if (key_def->parts[0].type == STRING) {
+		uint32_t size = mp_decode_strl(&key);
+		int n = size < 7 ? size : 7;
+		uint64_t res = 0;
+		for (int i = 0; i < n; i++) {
+			uint64_t x = key[i];
+			res |= (x << ((6 - i) * 9 + 1)) | (1ull << ((6 - i) * 9));
+		}
+		return res;
+	}
+	return 0;
+}
+
+static uint64_t
+calc_hint_tuple(const struct tuple *tuple, struct key_def *key_def)
+{
+	if (key_def->parts[0].fieldno == 0) {
+		const char *data = tuple->data;
+		mp_decode_array(&data);
+		return calc_hint_key(data, key_def);
+	} else {
+		const char *data = tuple_field_old(tuple_format(tuple), tuple, key_def->parts[0].fieldno);
+		return calc_hint_key(data, key_def);
+	}
+	return 0;
+}
+
 int tree_index_qcompare(const void* a, const void *b, void *c)
 {
-	return tree_index_compare(*(struct tuple **)a,
-		*(struct tuple **)b, (struct key_def *)c);
+	return tree_index_compare(*(struct tuple_with_hint *)a,
+		*(struct tuple_with_hint *)b, (struct key_def *)c);
 }
 
 /* {{{ TreeIndex Iterators ****************************************/
@@ -108,29 +150,29 @@ static struct tuple *
 tree_iterator_fwd(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
+	struct tuple_with_hint *res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
 	if (!res)
 		return 0;
 	bps_tree_index_itr_next(it->tree, &it->bps_tree_iter);
-	return *res;
+	return res->tuple;
 }
 
 static struct tuple *
 tree_iterator_bwd(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
+	struct tuple_with_hint *res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
 	if (!res)
 		return 0;
 	bps_tree_index_itr_prev(it->tree, &it->bps_tree_iter);
-	return *res;
+	return res->tuple;
 }
 
 static struct tuple *
 tree_iterator_fwd_check_equality(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
+	struct tuple_with_hint *res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
 	if (!res)
 		return 0;
 	if (tree_index_compare_key(*res, &it->key_data, it->key_def) != 0) {
@@ -138,19 +180,19 @@ tree_iterator_fwd_check_equality(struct iterator *iterator)
 		return 0;
 	}
 	bps_tree_index_itr_next(it->tree, &it->bps_tree_iter);
-	return *res;
+	return res->tuple;
 }
 
 static struct tuple *
 tree_iterator_fwd_check_next_equality(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
+	struct tuple_with_hint *res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
 	if (!res)
 		return 0;
 	bps_tree_index_itr_next(it->tree, &it->bps_tree_iter);
 	iterator->next = tree_iterator_fwd_check_equality;
-	return *res;
+	return res->tuple;
 }
 
 static struct tuple *
@@ -166,7 +208,7 @@ static struct tuple *
 tree_iterator_bwd_check_equality(struct iterator *iterator)
 {
 	struct tree_iterator *it = tree_iterator(iterator);
-	tuple **res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
+	struct tuple_with_hint *res = bps_tree_index_itr_get_elem(it->tree, &it->bps_tree_iter);
 	if (!res)
 		return 0;
 	if (tree_index_compare_key(*res, &it->key_data, it->key_def) != 0) {
@@ -174,7 +216,7 @@ tree_iterator_bwd_check_equality(struct iterator *iterator)
 		return 0;
 	}
 	bps_tree_index_itr_prev(it->tree, &it->bps_tree_iter);
-	return *res;
+	return res->tuple;
 }
 
 static struct tuple *
@@ -242,8 +284,8 @@ TreeIndex::memsize() const
 struct tuple *
 TreeIndex::random(uint32_t rnd) const
 {
-	struct tuple **res = bps_tree_index_random(&tree, rnd);
-	return res ? *res : 0;
+	struct tuple_with_hint *res = bps_tree_index_random(&tree, rnd);
+	return res ? res->tuple : 0;
 }
 
 struct tuple *
@@ -252,10 +294,11 @@ TreeIndex::findByKey(const char *key, uint32_t part_count) const
 	assert(key_def->is_unique && part_count == key_def->part_count);
 
 	struct key_data key_data;
+	key_data.hint = calc_hint_key(key, key_def);
 	key_data.key = key;
 	key_data.part_count = part_count;
-	struct tuple **res = bps_tree_index_find(&tree, &key_data);
-	return res ? *res : 0;
+	struct tuple_with_hint *res = bps_tree_index_find(&tree, &key_data);
+	return res ? res->tuple : 0;
 }
 
 struct tuple *
@@ -265,29 +308,35 @@ TreeIndex::replace(struct tuple *old_tuple, struct tuple *new_tuple,
 	uint32_t errcode;
 
 	if (new_tuple) {
-		struct tuple *dup_tuple = NULL;
+		struct tuple_with_hint to_add;
+		to_add.tuple = new_tuple;
+		to_add.hint = calc_hint_tuple(new_tuple, key_def);
+		struct tuple_with_hint was_in = {0, 0};
 
 		/* Try to optimistically replace the new_tuple. */
 		bool tree_res =
-		bps_tree_index_insert(&tree, new_tuple, &dup_tuple);
+		bps_tree_index_insert(&tree, to_add, &was_in);
 		if (!tree_res) {
 			tnt_raise(ClientError, ER_MEMORY_ISSUE,
 				  BPS_TREE_EXTENT_SIZE, "TreeIndex", "replace");
 		}
 
-		errcode = replace_check_dup(old_tuple, dup_tuple, mode);
+		errcode = replace_check_dup(old_tuple, was_in.tuple, mode);
 
 		if (errcode) {
-			bps_tree_index_delete(&tree, new_tuple);
-			if (dup_tuple)
-				bps_tree_index_insert(&tree, dup_tuple, 0);
+			bps_tree_index_delete(&tree, to_add);
+			if (was_in.tuple)
+				bps_tree_index_insert(&tree, was_in, 0);
 			tnt_raise(ClientError, errcode, index_id(this));
 		}
-		if (dup_tuple)
-			return dup_tuple;
+		if (was_in.tuple)
+			return was_in.tuple;
 	}
 	if (old_tuple) {
-		bps_tree_index_delete(&tree, old_tuple);
+		struct tuple_with_hint to_remove;
+		to_remove.tuple = old_tuple;
+		to_remove.hint = calc_hint_tuple(old_tuple, key_def);
+		bps_tree_index_delete(&tree, to_remove);
 	}
 	return old_tuple;
 }
@@ -330,6 +379,10 @@ TreeIndex::initIterator(struct iterator *iterator, enum iterator_type type,
 	}
 	it->key_data.key = key;
 	it->key_data.part_count = part_count;
+	if (it->key_data.part_count)
+		it->key_data.hint = calc_hint_key(key, key_def);
+	else
+		it->key_data.hint = 0;
 
 	bool exact = false;
 	if (key == 0) {
@@ -390,8 +443,8 @@ TreeIndex::reserve(uint32_t size_hint)
 {
 	if (size_hint < build_array_alloc_size)
 		return;
-	build_array = (struct tuple**)
-		realloc(build_array, size_hint * sizeof(struct tuple *));
+	build_array = (struct tuple_with_hint*)
+		realloc(build_array, size_hint * sizeof(struct tuple_with_hint));
 	build_array_alloc_size = size_hint;
 }
 
@@ -399,26 +452,28 @@ void
 TreeIndex::buildNext(struct tuple *tuple)
 {
 	if (!build_array) {
-		build_array = (struct tuple**)malloc(BPS_TREE_EXTENT_SIZE);
+		build_array = (struct tuple_with_hint *)malloc(BPS_TREE_EXTENT_SIZE);
 		build_array_alloc_size =
-			BPS_TREE_EXTENT_SIZE / sizeof(struct tuple*);
+			BPS_TREE_EXTENT_SIZE / sizeof(struct tuple_with_hint);
 	}
 	assert(build_array_size <= build_array_alloc_size);
 	if (build_array_size == build_array_alloc_size) {
 		build_array_alloc_size = build_array_alloc_size +
 					 build_array_alloc_size / 2;
-		build_array = (struct tuple**)
+		build_array = (struct tuple_with_hint *)
 			realloc(build_array,
 				build_array_alloc_size *
-				sizeof(struct tuple *));
+				sizeof(struct tuple_with_hint));
 	}
-	build_array[build_array_size++] = tuple;
+	build_array[build_array_size].tuple = tuple;
+	build_array[build_array_size].hint = calc_hint_tuple(tuple, key_def);
+	build_array_size++;
 }
 
 void
 TreeIndex::endBuild()
 {
-	qsort_arg(build_array, build_array_size, sizeof(struct tuple *), tree_index_qcompare, key_def);
+	qsort_arg(build_array, build_array_size, sizeof(struct tuple_with_hint), tree_index_qcompare, key_def);
 	bps_tree_index_build(&tree, build_array, build_array_size);
 
 	free(build_array);

@@ -35,8 +35,8 @@ res = {}
 for i = 2001,2010 do table.insert(res, (s:get{i})) end
 res
 
---count must be greater that 1000 but less than 2000
-function check_iter_and_size() local count = 0 for _, t in s.index[0]:pairs() do count = count + 1 end return count <= 1000 and "fail 1" or count >= 2000 and "fail 2" or "ok" end
+--count must be greater that 500 but less than 1000
+function check_iter_and_size() local count = 0 for _, t in s.index[0]:pairs() do count = count + 1 end return count <= 500 and "fail 1" or count >= 1000 and "fail 2" or "ok" end
 check_iter_and_size()
 
 for i = 2501,3500 do s:insert{i, i} end

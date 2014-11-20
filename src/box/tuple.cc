@@ -432,6 +432,13 @@ tuple_new(struct tuple_format *format, const char *data, const char *end)
 inline __attribute__((always_inline)) int
 mp_compare_uint(const char **data_a, const char **data_b);
 
+typedef uint64_t enc_t;
+template<enc_t shift>
+enc_t shift_mask(enc_t x)
+{
+	return (x << (shift * 9 + 1)) | (1ull << (shift * 9));
+}
+
 int
 tuple_compare_field(const char *field_a, const char *field_b,
 		    enum field_type type)

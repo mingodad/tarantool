@@ -34,18 +34,26 @@
 struct tuple;
 struct key_data;
 
-int
-tree_index_compare(const struct tuple *a, const struct tuple *b, struct key_def *key_def);
+struct tuple_with_hint {
+	uint64_t hint;
+	struct tuple *tuple;
+	//bool operator==(const struct tuple_with_hint &another) const { return tuple == another.tuple; }
+	bool operator!=(const struct tuple_with_hint &another) const { return tuple != another.tuple; }
+};
 
 int
-tree_index_compare_key(const tuple *a, const key_data *b, struct key_def *key_def);
+tree_index_compare(struct tuple_with_hint a, struct tuple_with_hint b, struct key_def *key_def);
+
+int
+tree_index_compare_key(struct tuple_with_hint a, const key_data *b, struct key_def *key_def);
+
 
 #define BPS_TREE_NAME _index
 #define BPS_TREE_BLOCK_SIZE (512)
 #define BPS_TREE_EXTENT_SIZE (16*1024)
 #define BPS_TREE_COMPARE(a, b, arg) tree_index_compare(a, b, arg)
 #define BPS_TREE_COMPARE_KEY(a, b, arg) tree_index_compare_key(a, b, arg)
-#define bps_tree_elem_t struct tuple *
+#define bps_tree_elem_t struct tuple_with_hint
 #define bps_tree_key_t struct key_data *
 #define bps_tree_arg_t struct key_def *
 
@@ -75,7 +83,7 @@ public:
 
 // protected:
 	struct bps_tree_index tree;
-	struct tuple **build_array;
+	struct tuple_with_hint *build_array;
 	size_t build_array_size, build_array_alloc_size;
 };
 
