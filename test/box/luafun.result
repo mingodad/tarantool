@@ -111,19 +111,19 @@ function pred(t) return t[1] % 2 == 0 end
 ...
 fun.iter(space):totable()
 ---
-- - [1, 1]
+- - [5, 5]
+  - [1, 1]
   - [2, 2]
   - [3, 3]
   - [4, 4]
-  - [5, 5]
 ...
 fun.iter(space:pairs()):totable()
 ---
-- - [1, 1]
+- - [5, 5]
+  - [1, 1]
   - [2, 2]
   - [3, 3]
   - [4, 4]
-  - [5, 5]
 ...
 space:pairs():filter(pred):drop(2):take(3):totable()
 ---
@@ -132,25 +132,25 @@ space:pairs():filter(pred):drop(2):take(3):totable()
 -- iter on index (using __ipairs)
 fun.iter(space.index[0]):totable()
 ---
-- - [1, 1]
+- - [5, 5]
+  - [1, 1]
   - [2, 2]
   - [3, 3]
   - [4, 4]
-  - [5, 5]
 ...
 fun.iter(space.index[0]:pairs()):totable()
 ---
-- - [1, 1]
+- - [5, 5]
+  - [1, 1]
   - [2, 2]
   - [3, 3]
   - [4, 4]
-  - [5, 5]
 ...
 space.index[0]:pairs():drop(2):take(3):totable()
 ---
-- - [3, 3]
+- - [2, 2]
+  - [3, 3]
   - [4, 4]
-  - [5, 5]
 ...
 -- test global functions
 --# setopt delimiter ';'

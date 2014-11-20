@@ -297,7 +297,8 @@ for _, t in s.index[0]:pairs() do table.insert(res, t) end
 ...
 res
 ---
-- - [1, 1, 'test1']
+- - [10, 10, 'test10']
+  - [1, 1, 'test1']
   - [2, 2, 'test2']
   - [3, 3, 'test3']
   - [4, 4, 'test4']
@@ -306,7 +307,6 @@ res
   - [7, 7, 'test7']
   - [8, 8, 'test8']
   - [9, 9, 'test9']
-  - [10, 10, 'test10']
 ...
 errinj.set("ERRINJ_INDEX_ALLOC", true)
 ---
@@ -339,7 +339,8 @@ for _, t in s.index[0]:pairs() do table.insert(res, t) end
 ...
 res
 ---
-- - [1, 1, 'test1']
+- - [10, 10, 'test10']
+  - [1, 1, 'test1']
   - [2, 2, 'test2']
   - [3, 3, 'test3']
   - [4, 4, 'test4']
@@ -348,11 +349,10 @@ res
   - [7, 7, 'test7']
   - [8, 8, 'test8']
   - [9, 9, 'test9']
-  - [10, 10, 'test10']
 ...
 for i = 501,2500 do s:insert{i, i} end
 ---
-- error: Failed to allocate 23 bytes in hash for key
+- error: Failed to allocate 10 bytes in hash for key
 ...
 s:delete{1}
 ---
@@ -406,7 +406,7 @@ check_iter_and_size(9)
 ...
 for i = 2501,3500 do s:insert{i, i} end
 ---
-- error: Failed to allocate 23 bytes in hash for key
+- error: Failed to allocate 9 bytes in hash for key
 ...
 s:delete{2}
 ---
@@ -435,7 +435,7 @@ res
 ...
 for i = 3501,4500 do s:insert{i, i} end
 ---
-- error: Failed to allocate 23 bytes in hash for key
+- error: Failed to allocate 8 bytes in hash for key
 ...
 s:delete{3}
 ---

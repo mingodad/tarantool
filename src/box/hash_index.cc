@@ -39,17 +39,17 @@ enum {
 };
 
 static inline bool
-mh_index_eq(struct tuple *const *tuple_a, struct tuple *const *tuple_b,
+equal(struct tuple *tuple_a, struct tuple *tuple_b,
 	    const struct key_def *key_def)
 {
-	return tuple_compare(*tuple_a, *tuple_b, key_def) == 0;
+	return tuple_compare(tuple_a, tuple_b, key_def) == 0;
 }
 
 static inline bool
-mh_index_eq_key(const char *key, struct tuple *const *tuple,
+equal_key(struct tuple *tuple, const char *key,
 		const struct key_def *key_def)
 {
-	return tuple_compare_with_key(*tuple, key, key_def->part_count,
+	return tuple_compare_with_key(tuple, key, key_def->part_count,
 				      key_def) == 0;
 }
 
@@ -89,7 +89,7 @@ mh_hash_field(uint32_t *ph1, uint32_t *pcarry, const char **field,
 }
 
 static inline uint32_t
-mh_index_hash(struct tuple *const *tuple, const struct key_def *key_def)
+tuple_hash(struct tuple *tuple, const struct key_def *key_def)
 {
 	const struct key_part *part = key_def->parts;
 	/*
@@ -97,7 +97,7 @@ mh_index_hash(struct tuple *const *tuple, const struct key_def *key_def)
 	 * single-part hash over an integer field.
 	 */
 	if (key_def->part_count == 1 && part->type == NUM) {
-		const char *field = tuple_field(*tuple, part->fieldno);
+		const char *field = tuple_field(tuple, part->fieldno);
 		uint64_t val = mp_decode_uint(&field);
 		if (likely(val <= UINT32_MAX))
 			return val;
@@ -109,7 +109,7 @@ mh_index_hash(struct tuple *const *tuple, const struct key_def *key_def)
 	uint32_t total_size = 0;
 
 	for ( ; part < key_def->parts + key_def->part_count; part++) {
-		const char *field = tuple_field(*tuple, part->fieldno);
+		const char *field = tuple_field(tuple, part->fieldno);
 		total_size += mh_hash_field(&h, &carry, &field, part->type);
 	}
 
@@ -117,7 +117,7 @@ mh_index_hash(struct tuple *const *tuple, const struct key_def *key_def)
 }
 
 static inline uint32_t
-mh_index_hash_key(const char *key, const struct key_def *key_def)
+key_hash(const char *key, const struct key_def *key_def)
 {
 	const struct key_part *part = key_def->parts;
 
@@ -139,25 +139,18 @@ mh_index_hash_key(const char *key, const struct key_def *key_def)
 	return PMurHash32_Result(h, carry, total_size);
 }
 
-#define mh_int_t uint32_t
-#define mh_arg_t const struct key_def *
-
-#define mh_hash(a, arg) mh_index_hash(a, arg)
-#define mh_hash_key(a, arg) mh_index_hash_key(a, arg)
-#define mh_eq(a, b, arg) mh_index_eq(a, b, arg)
-#define mh_eq_key(a, b, arg) mh_index_eq_key(a, b, arg)
-
-#define mh_key_t const char *
-typedef struct tuple * mh_node_t;
-#define mh_name _index
-#define MH_SOURCE 1
-#include "salad/mhash.h"
+typedef struct tuple *hash_value_t;
+typedef const char *hash_key_t;
+typedef struct key_def *arg_t;
+typedef uint32_t hash_t;
+static const hash_t hash_end = (hash_t)-1;
+#include "salad/right.h"
 
 /* {{{ HashIndex Iterators ****************************************/
 
 struct hash_iterator {
 	struct iterator base; /* Must be the first member. */
-	struct mh_index_t *hash;
+	struct right *hash;
 	uint32_t h_pos;
 };
 
@@ -174,11 +167,8 @@ hash_iterator_ge(struct iterator *ptr)
 	assert(ptr->free == hash_iterator_free);
 	struct hash_iterator *it = (struct hash_iterator *) ptr;
 
-	while (it->h_pos < mh_end(it->hash)) {
-		if (mh_exist(it->hash, it->h_pos))
-			return *mh_index_node(it->hash, it->h_pos++);
-		it->h_pos++;
-	}
+	if (it->h_pos < it->hash->count)
+		return right_get(it->hash, it->h_pos++);
 	return NULL;
 }
 
@@ -202,43 +192,44 @@ hash_iterator_eq(struct iterator *it)
 HashIndex::HashIndex(struct key_def *key_def)
 	: Index(key_def)
 {
-	hash = mh_index_new();
+	hash = new struct right;
 	if (hash == NULL) {
 		tnt_raise(ClientError, ER_MEMORY_ISSUE, sizeof(hash),
 			  "HashIndex", "hash");
 	}
+	right_init(hash, this->key_def);
 }
 
 HashIndex::~HashIndex()
 {
-	mh_index_delete(hash);
+	right_destroy(hash);
+	delete hash;
 }
 
 void
 HashIndex::reserve(uint32_t size_hint)
 {
-	mh_index_reserve(hash, size_hint, key_def);
+	(void)size_hint;
 }
 
 size_t
 HashIndex::size() const
 {
-	return mh_size(hash);
+	return hash->count;
 }
 
 size_t
 HashIndex::memsize() const
 {
-        return mh_index_memsize(hash);
+        return right_memsize(hash);
 }
 
 struct tuple *
 HashIndex::random(uint32_t rnd) const
 {
-	uint32_t k = mh_index_random(hash, rnd);
-	if (k != mh_end(hash))
-		return *mh_index_node(hash, k);
-	return NULL;
+	if (hash->count == 0)
+		return NULL;
+	return right_get(hash, rnd % hash->count);
 }
 
 struct tuple *
@@ -248,9 +239,10 @@ HashIndex::findByKey(const char *key, uint32_t part_count) const
 	(void) part_count;
 
 	struct tuple *ret = NULL;
-	uint32_t k = mh_index_find(hash, key, key_def);
-	if (k != mh_end(hash))
-		ret = *mh_index_node(hash, k);
+	uint32_t h = key_hash(key, key_def);
+	uint32_t k = right_find_key(hash, h, key);
+	if (k != hash_end)
+		ret = right_get(hash, k);
 	return ret;
 }
 
@@ -261,29 +253,29 @@ HashIndex::replace(struct tuple *old_tuple, struct tuple *new_tuple,
 	uint32_t errcode;
 
 	if (new_tuple) {
+		uint32_t h = tuple_hash(new_tuple, key_def);
 		struct tuple *dup_tuple = NULL;
-		struct tuple **dup_node = &dup_tuple;
-		uint32_t pos = mh_index_put(hash, &new_tuple,
-					    &dup_node, key_def);
+		hash_t pos = right_replace(hash, h, new_tuple, &dup_tuple);
+		if (pos == hash_end)
+			pos = right_insert(hash, h, new_tuple);
 
 		ERROR_INJECT(ERRINJ_INDEX_ALLOC,
 		{
-			mh_index_del(hash, pos, key_def);
-			pos = mh_end(hash);
+			right_delete(hash, pos);
+			pos = hash_end;
 		});
 
-		if (pos == mh_end(hash)) {
-			tnt_raise(LoggedError, ER_MEMORY_ISSUE, (ssize_t) pos,
+		if (pos == hash_end) {
+			tnt_raise(LoggedError, ER_MEMORY_ISSUE, (ssize_t) hash->count,
 				  "hash", "key");
 		}
 		errcode = replace_check_dup(old_tuple, dup_tuple, mode);
 
 		if (errcode) {
-			mh_index_remove(hash, &new_tuple, key_def);
+			right_delete(hash, pos);
 			if (dup_tuple) {
-				pos = mh_index_put(hash, &dup_tuple, NULL,
-						   key_def);
-				if (pos == mh_end(hash)) {
+				uint32_t pos = right_insert(hash, h, dup_tuple);
+				if (pos == hash_end) {
 					panic("Failed to allocate memory in "
 					      "recover of int hash");
 				}
@@ -296,7 +288,10 @@ HashIndex::replace(struct tuple *old_tuple, struct tuple *new_tuple,
 	}
 
 	if (old_tuple) {
-		mh_index_remove(hash, &old_tuple, key_def);
+		uint32_t h = tuple_hash(old_tuple, key_def);
+		hash_t slot = right_find(hash, h, old_tuple);
+		if (slot != hash_end)
+			right_delete(hash, slot);
 	}
 	return old_tuple;
 }
@@ -329,12 +324,12 @@ HashIndex::initIterator(struct iterator *ptr, enum iterator_type type,
 
 	switch (type) {
 	case ITER_ALL:
-		it->h_pos = mh_begin(hash);
+		it->h_pos = 0;
 		it->base.next = hash_iterator_ge;
 		break;
 	case ITER_EQ:
 		assert(part_count > 0);
-		it->h_pos = mh_index_find(hash, key, key_def);
+		it->h_pos = right_find_key(hash, key_hash(key, key_def), key);
 		it->base.next = hash_iterator_eq;
 		break;
 	default:
