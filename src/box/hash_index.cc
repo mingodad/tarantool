@@ -290,8 +290,8 @@ HashIndex::replace(struct tuple *old_tuple, struct tuple *new_tuple,
 	if (old_tuple) {
 		uint32_t h = tuple_hash(old_tuple, key_def);
 		hash_t slot = right_find(hash, h, old_tuple);
-		if (slot != hash_end)
-			right_delete(hash, slot);
+		assert(slot != hash_end);
+		right_delete(hash, slot);
 	}
 	return old_tuple;
 }
